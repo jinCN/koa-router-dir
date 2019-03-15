@@ -1,67 +1,75 @@
-const BSON = require('bson')
-const typeIs = require('type-is')
-const bytes = require('bytes')
-const getBody = require('raw-body')
-const Cb = require('@superjs/cb')
-let bson = new BSON()
-module.exports = function (options = {}) {
-  options = {
-    ...options
-  }
-  options.limit = typeof options.limit !== 'number'
-    ? bytes.parse(options.limit || '10mb')
-    : options.limit
-  options.type = Array.isArray(options.type)
-    ? [options.type || 'application/bson'] || []
-    : options.type
-  options.bson = options.bson || bson
-  
-  return handler.bind(null, options)
-}
-module.exports.bson = bson
+const Router = require('koa-router')
+const compose = require('koa-compose')
+const p = require('path')
+const fs = require('fs')
 
-function handler (options = {}, arg1, arg2, arg3) {
-  if (isKoa(arg1)) {
-    return handlerForKoa(options, arg1, arg2)
+function applyDirToRouter (path = __dirname, followPrefix = '/', isRoot = false) {
+  let _router = new Router()
+  let _followRouter = new Router()
+  let routerUsed = false
+
+  function router () {
+    routerUsed = true
+    return _router
+  }
+
+  function followRouter () {
+    routerUsed = true
+    return _followRouter
+  }
+
+  let dirents = fs.readdirSync(path, { withFileTypes: true })
+
+  if (!isRoot) {
+    if (dirents.find(v => v.name === '_' && v.isDirectory())) {
+      let dirents2 = fs.readdirSync(p.join(path, '_'), { withFileTypes: true })
+      if (dirents2.find(v => v.name === 'index.js' && v.isFile())) {
+        let f = require(p.join(path, '_', 'index.js'))
+        typeof f === 'function' && f(router())
+      }
+      for (let dirent of dirents2) {
+        if (dirent.isFile() && dirent.name.endsWith('.js')) {
+          if (dirent.name === 'index.js') continue
+
+          let f = require(p.join(path, '_', dirent.name))
+          typeof f === 'function' && f(router())
+        }
+      }
+    }
+    if (dirents.find(v => v.name === 'index.js' && v.isFile())) {
+      let f = require(p.join(path, 'index.js'))
+      typeof f === 'function' && f(followRouter())
+    }
+  }
+  for (let dirent of dirents) {
+    if (dirent.isFile() && dirent.name.endsWith('.js')) {
+      if (dirent.name === 'index.js') continue
+
+      let f = require(p.join(path, dirent.name))
+      typeof f === 'function' && f(followRouter())
+    } else if (dirent.isDirectory()) {
+      if (dirent.name === '_') continue
+
+      let splits = dirent.name.split('|')
+      let prefix = '/' + splits[0]
+      let followPrefix = '/' + splits.slice(1).join('/')
+
+      let subRouter = applyDirToRouter(p.join(path, dirent.name), followPrefix)
+      subRouter &&
+      followRouter().use(prefix, subRouter.routes(), subRouter.allowedMethods())
+    }
+  }
+  if (isRoot) return _followRouter
+  if (!routerUsed) {
+    return null
   } else {
-    return handlerForExpress(options, arg1, arg2, arg3)
+    _router.use(followPrefix, _followRouter.routes(), _followRouter.allowedMethods())
+    return _router
   }
 }
 
-async function handlerForKoa (options, ctx, next) {
-  if (!typeIs(ctx.req, options.type)) {
-    return next()
-  }
-  await readBSON(options, ctx.req, ctx.request)
-  return next()
-}
+module.exports = function (dirname) {
+  let router = applyDirToRouter(dirname, '/', true)
 
-function handlerForExpress (options, req, res, next) {
-  if (!typeIs(req, options.type)) {
-    return next()
-  }
-  readBSON(options, req, req).then(next, next)
-}
-
-async function readBSON (options, req, hostObj) {
-  hostObj.body = {}
-  if (options.rawbody) hostObj.rawbody = Buffer.from([])
-  if (!typeIs.hasBody(req)) {
-    return
-  }
-  getBody(req, {limit: options.limit}, Cb().pair)
-  let rawBody = await Cb.pop()
-  hostObj.body = options.bson.deserialize(rawBody)
-  if (options.rawbody) hostObj.rawBody = rawBody
-}
-
-function isKoa (ctx) {
-  // inspire by cabin, to check koa ctx
-  // https://github.com/cabinjs/cabin/blob/master/src/index.js
-  return isObject(ctx) && isObject(ctx.request)
-}
-
-function isObject (value) {
-  const type = typeof value
-  return value != null && (type === 'object' || type === 'function')
+  return compose([router.routes(), router.allowedMethods()])
 }
