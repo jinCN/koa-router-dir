@@ -3,7 +3,7 @@ const compose = require('koa-compose')
 const p = require('path')
 const fs = require('fs')
 
-function applyDirToRouter (path = __dirname, followPrefix = '/', isRoot = false) {
+function applyDirToRouter (path, followPrefix = '/', isRoot = false) {
   let _router = new Router()
   let _followRouter = new Router()
   let routerUsed = false
